@@ -1,0 +1,67 @@
+
+# ============================================================
+# Conditional Minimum Average Variance Estimation (MAVE)
+# for Dimension Reduction of Climate Variables
+# ============================================================
+
+# --- Setup ---
+rm(list = ls())
+setwd("G:/First/Japanese encephalities/02 data")
+library(MAVE)
+library(dplyr)
+library(MASS)
+
+# --- Load Data ---
+X <- data[, vars_climate]
+Y <- as.vector(data$病例数)
+
+mean_X <- colMeans(X)
+sd_X <- apply(X, 2, sd)
+X_scaled <- scale(X, center = mean_X, scale = sd_X)
+
+# --- Load and Prepare Future Climate Data ---
+dir_path <- "G:/First/Japanese encephalities/02 data/CMIP6 data"
+files <- list.files(dir_path, pattern = "*.csv", full.names = TRUE)
+data_future <- do.call(rbind, lapply(files, read.csv)) %>%
+  filter(.[, 2] > 2022) %>%
+  replace(is.na(.), 0) %>%
+  select(all_of(vars_climate))
+
+
+X_all <- rbind(X_scaled, scale(data_future, center = mean_X, scale = sd_X))
+min_X <- apply(X_all, 2, min)
+
+# --- Box-Cox Transformation ---
+set.seed(1234)
+eps <- runif(length(min_X), 0, 0.1)
+X_bc <- X_scaled
+
+for (i in seq_along(vars_climate)) {
+  v <- X_bc[, i] - min_X[i] + eps[i]
+  lambda <- boxcox(v ~ 1)$x[which.max(boxcox(v ~ 1)$y)]
+  X_bc[, i] <- (v^lambda - 1) / lambda
+}
+
+# --- Run MAVE Model ---
+mave_res <- mave(Y ~ X_bc, max.dim = 20)
+mave_dim <- mave.dim(mave_res)
+cv_values <- mave_dim$cv
+
+plot(cv_values, type = "b", xlab = "Dimensions", ylab = "CV value",
+     main = "Cross-Validation Error by Dimension")
+
+# --- Extract Dimension-Reduced Data and Coefficients ---
+X_mave <- mave.data(mave_dim, X_bc, dim = 10)
+coef_mat <- coef(mave_dim, dim = 10)
+rownames(coef_mat) <- sub("X_bc", "", rownames(coef_mat))
+
+# Absolute coefficients as importance measure
+coef_abs <- abs(coef_mat)
+rownames(coef_abs) <- sub("X_bc", "", rownames(coef_abs))
+
+# --- Save Results ---
+save(mave_res, mave_dim, X_mave, file = "MAVE/mave_results.RData")
+write.csv(coef_abs, "MAVE/mave_coefficients.csv", row.names = TRUE)
+
+
+
