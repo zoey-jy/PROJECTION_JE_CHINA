@@ -1,0 +1,76 @@
+# ============================================================
+# Boruta Feature Selection + GAM Regional Modeling
+# ============================================================
+
+# --- Setup ---
+# install.packages("Boruta")
+library(Boruta)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(forcats)
+
+# --- Boruta Feature Selection ---
+x <- data[, c(42:48, 50:55, 57:59)] %>% mutate_all(as.factor)
+y <- data$cases
+set.seed(123)
+boruta_res <- Boruta(x, y, pValue = 0.05, doTrace = 2)
+print(boruta_res)
+
+# --- Visualize Feature Importance ---
+imp_df <- as.data.frame(boruta_res$ImpHistory) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Importance") %>%
+  filter(is.finite(Importance)) %>%
+  group_by(Variable) %>%
+  mutate(med = median(Importance, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Variable = fct_reorder(Variable, med))
+
+ggplot(imp_df, aes(x = Importance, y = Variable, fill = Variable)) +
+  geom_boxplot(show.legend = FALSE, outlier.shape = NA) +
+  theme_minimal() +
+  labs(x = "Importance (Z-score)", y = NULL)
+
+# Selected important variables
+important_vars <- getSelectedAttributes(boruta_res, withTentative = FALSE)
+print(important_vars)
+
+
+# --- GAM Modeling ---
+library(mgcv)
+library(dplyr) 
+library(tidyverse)
+
+knot <- 5
+model_list <- list()
+
+# Basic model
+model_list$basic <- gam(cases ~ s(tem, k = knot) + s(prec, k = knot),
+                        family = ziP, data = data)
+
+# Zonal models
+for (v in zone_vars) {
+  data[[v]] <- as.factor(data[[v]])
+  f <- as.formula(sprintf(
+    "cases ~ s(tem, by=%s, k=%d) + s(prec, by=%s, k=%d) + factor(%s)",
+    v, knot, v, knot, v
+  ))
+  model_list[[v]] <- try(gam(f, family = ziP, data = data))
+}
+
+# --- Model Diagnostics ---
+get_model_diag <- function(models) {
+  tibble(
+    Model = names(models),
+    Formula = sapply(models, function(m) paste(m$formula[2], "~", m$formula[3])),
+    UBRE = sapply(models, `[[`, "gcv.ubre"),
+    AIC = sapply(models, `[[`, "aic"),
+    Adj_R2 = sapply(models, function(m) summary(m)$r.sq %||% NA),
+    DevExpl = sapply(models, function(m) summary(m)$dev.expl %||% NA)
+  )
+}
+
+diag_df <- get_model_diag(model_list)
+write.csv(diag_df, sprintf("model_zoneVarSelection_diag_k%d.csv", knot), row.names = FALSE)
+
+
