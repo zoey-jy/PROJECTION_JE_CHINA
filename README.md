@@ -1,26 +1,26 @@
 # Software dependencies
 For the development of the code in this repository we primarily made use of the following R packages:
 
-* brinla version 0.1.0
-* Boruta version 8.0.0
-* car version 3.1-3
-carData version 3.0-5
-dplyr version 1.1.4
-INLA version 24.06.27
-lubridate version 1.9.3
-MAVE version 1.3.11
-mgcv version 1.9-1
-mic version 3.18.0
-purrr version 1.0.2
-reshape2 version 1.4.4
-readr version 2.1.5
-stringr version 1.5.1
-sp version 2.2-0
-sf version 1.0-19
-spdep version 1.3-10
-tidyr version 1.3.1
-tidyverse version 2.0.0
-tibble version 3.2.1
+* `brinla` version 0.1.0
+* `Boruta` version 8.0.0
+* `car` version 3.1-3
+* `carData` version 3.0-5
+* `dplyr` version 1.1.4
+* `INLA` version 24.06.27
+* `lubridate` version 1.9.3
+* `MAVE` version 1.3.11
+* `mgcv` version 1.9-1
+* `mic` version 3.18.0
+* `purrr` version 1.0.2
+* `reshape2` version 1.4.4
+* `readr` version 2.1.5
+* `stringr` version 1.5.1
+* `sp` version 2.2-0
+* `sf` version 1.0-19
+* `spdep` version 1.3-10
+* `tidyr` version 1.3.1
+* `tidyverse` version 2.0.0
+* `tibble` version 3.2.1
 
 There is no need for non-standard hardware.
 
