@@ -1,9 +1,9 @@
 # Software dependencies
 For the development of the code in this repository we primarily made use of the following R packages:
 
-## brinla version 0.1.0
-## Boruta version 8.0.0
-## car version 3.1-3
+* brinla version 0.1.0
+* Boruta version 8.0.0
+* car version 3.1-3
 carData version 3.0-5
 dplyr version 1.1.4
 INLA version 24.06.27
