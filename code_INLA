@@ -4,9 +4,6 @@
 # ============================================================
 
 # --- Setup ---
-rm(list = ls())
-gc()
-
 library(dplyr)
 library(INLA)
 library(inlabru)
