@@ -13,7 +13,7 @@ library(MASS)
 
 # --- Load Data ---
 X <- data[, vars_climate]
-Y <- as.vector(data$病例数)
+Y <- as.vector(data$cases)
 
 mean_X <- colMeans(X)
 sd_X <- apply(X, 2, sd)
