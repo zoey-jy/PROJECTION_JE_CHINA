@@ -1,4 +1,4 @@
-# Projection_JE_CHINA
+# Japanese Encephalitis in 21st Century China: Projections Under Climate Change and Population Dynamics
 ## Software dependencies
 For the development of the code in this repository we primarily made use of the following R packages:
 
