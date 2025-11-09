@@ -2,9 +2,6 @@
 # Cross-validation for Japanese Encephalitis Models using INLA
 # -------------------------------
 
-rm(list = ls())
-gc()
-
 library(INLA)
 library(dplyr)
 library(data.table)
