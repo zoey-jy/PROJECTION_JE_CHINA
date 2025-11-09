@@ -1,0 +1,67 @@
+# -------------------------------
+# Contribution to JE risk
+# -------------------------------
+library(INLA)
+library(inlabru)
+library(dplyr)
+
+inla.setOption(inla.mode = "experimental")
+
+# Parameters
+scenarios <- c("SSP126", "SSP245", "SSP370", "SSP585")
+models <- c("IPSL-CM6A-LR", "NorESM2-MM", "MPI-ESM1-2-HR", "MRI-ESM2-0", "CMCC-ESM2")
+populations <- c("SSP1", "SSP2", "SSP3")
+flows <- c("SSP1", "SSP2", "SSP3")
+
+model_dir <- "G:/First/Japanese encephalities/02 data/modeling/result"
+
+# Result storage
+inla_results <- list()
+bri_results <- list()
+
+# Loop through all combinations
+counter <- 1
+for (s in scenarios) {
+  for (m in models) {
+    for (pop in populations) {
+      for (flow in flows) {
+
+        file_path <- file.path(model_dir, sprintf("obj.inla_%s_%s_flux%s_pop%s.RData", s, m, flow, pop))
+        if (!file.exists(file_path)) next
+
+        load(file_path)
+        if (!exists("fit")) next
+
+        # Fixed effects
+        fe <- as.data.frame(summary(fit)$fixed)
+        if (nrow(fe) > 0) {
+          fe$model <- sprintf("%s_%s_flux%s_pop%s", s, m, flow, pop)
+          fe$Variable <- rownames(fe)
+        }
+
+        # Random effects
+        re <- as.data.frame(bri.hyperpar.summary(fit))
+        if (nrow(re) > 0) {
+          re$model <- fe$model[1]
+          re$Variable <- rownames(re)
+          re <- re[!grepl("size for nbinomial zero-inflated observations|parameter alpha for zero-inflated nbinomial2", re$Variable), ]
+        }
+
+        # Contribution
+        total <- sum(abs(fe$mean), abs(re$mean))
+        if (nrow(fe) > 0) fe$contribute <- abs(fe$mean) / total
+        if (nrow(re) > 0) re$contribute <- abs(re$mean) / total
+
+        inla_results[[counter]] <- fe
+        bri_results[[counter]] <- re
+        counter <- counter + 1
+
+        rm(fit)
+      }
+    }
+  }
+}
+
+# Combine and save
+write.csv(do.call(rbind, inla_results), "INLA_Fixed_Effect_nozero.csv", row.names = FALSE)
+write.csv(do.call(rbind, bri_results), "INLA_Random_Effect_nozero.csv", row.names = FALSE)
