@@ -5,8 +5,6 @@
 # ============================================================
 
 # --- Setup ---
-rm(list = ls())
-setwd("G:/First/Japanese encephalities/02 data")
 library(MAVE)
 library(dplyr)
 library(MASS)
