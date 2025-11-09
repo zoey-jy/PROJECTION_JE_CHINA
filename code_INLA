@@ -1,0 +1,170 @@
+# ============================================================
+# INLA-based Spatiotemporal Projection of JE
+# incidence across China under multiple SSP scenarios.
+# ============================================================
+
+# --- Setup ---
+rm(list = ls())
+gc()
+
+library(dplyr)
+library(INLA)
+library(inlabru)
+library(spdep)
+library(ggplot2)
+library(MAVE)
+library(parallel)
+set.seed(1234)
+inla.setOption(inla.mode = "experimental")
+
+# --- Scenario Settings ---
+scenario.list <- c("SSP126", "SSP245", "SSP370", "SSP585")
+pattern.list  <- c("IPSL-CM6A-LR", "NorESM2-MM", "MPI-ESM1-2-HR", "MRI-ESM2-0", "CMCC-ESM2")
+popS.list     <- c("SSP1", "SSP2", "SSP3")
+n.quantile    <- 20
+
+# ==== Load Data ====
+W.City <- inla.read.graph("W.City.adj")
+data.model <- read.csv("10-22_city_year_month_order.csv")
+
+city.levels <- sort(unique(data.model$cid))
+data.model$CityID <- match(data.model$cid, city.levels)
+
+# --- Load MAVE Results ---
+load("G:/First/Japanese encephalities/02 data/MAVE/obj.mave.2010-2022.all.MAVE_new.RData")
+data.valid <- cbind(data.model, data.x.mave.all)
+data.valid$ID <- seq_len(nrow(data.valid))
+data.valid$logPop <- log(data.valid$pop)
+data.valid[data.valid$year > 2020, "total_count"] <- NA
+
+# --- Helper Function ---
+inla.group.wrap <- function(data, breaks) {
+  colnames(data)[2] <- "value"
+  data$group <- findInterval(data$value, breaks, rightmost.closed = TRUE)
+  median_map <- data %>%
+    group_by(group) %>%
+    summarize(var.grp = median(value, na.rm = TRUE))
+  data <- merge(data, median_map, by = "group")
+  data[order(data$ID), "var.grp"]
+}
+
+# --- Grouped Climate Variables ---
+for (i in 1:ncol(data.x.mave.all)) {
+  data.valid[[sprintf("dir%d.grp", i)]] <-
+    inla.group.wrap(
+      data.valid[, c("ID", sprintf("dir%d", i))],
+      quantile(data.valid[, sprintf("dir%d", i)], probs = seq(0, 1, 1 / n.quantile))
+    )
+}
+
+# --- Model Formula ---
+fml.best <- total_count ~ -1 + log(pop) + log(flux_grav) + log(flux_rad) +
+  X1 + X2 + X3+ X4 +  #specific spatial variables
+  f(dir1.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) + 
+  f(dir2.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+  f(dir3.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) + 
+  f(dir4.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+  f(dir5.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+  f(CityID, model = "bym", graph = W.City) +
+  f(month, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+  f(ID.area.year, model = "iid") +
+  f(ID.year, model = "iid")
+
+var.inla.base <- c(
+  "cid", "city", "year", "month", "total_count", "pop",
+  "X1", "X2", "X3", "X4",
+  "tem", "prec"
+)
+
+# --- Future Prediction ---
+setwd("G:/First/Japanese encephalities/02 data/modeling/result")
+
+for (scenario in scenario.list) {
+  for (pattern in pattern.list) {
+    
+    # ---- Load Future Climate Data ----
+    file_name <- sprintf(
+      "G:/First/Japanese encephalities/02 data/modeling/data/29climate_%s_%s_processed.csv",
+      scenario, pattern
+    )
+    cat("\n=== Loading:", file_name, "===\n")
+    
+    data.future.raw <- read.csv(file_name) %>%
+      filter(cid != 460300) %>%
+      arrange(cid, year, month) %>%
+      mutate(total_count = NA)
+    
+    
+    # ---- Apply MAVE Transformation ----
+    data.future.mave <- as.matrix(rbind(
+      data.model[, var.mave.all],
+      data.future.raw[, var.mave.all]
+    ))
+    
+    for (i in seq_along(var.mave.all)) {
+      v <- var.mave.all[i]
+      x <- data.future.mave[, i]
+      x <- (x - mave.info[[v]]$var.mean) / mave.info[[v]]$var.sd
+      x <- x - mave.info[[v]]$var.min + mave.info$eps[i]
+      lambda <- mave.info[[v]]$lambda
+      data.future.mave[, i] <- (x^lambda - 1) / lambda
+    }
+    data.future.mave <- mave.data(dr.mave.dim.all, data.future.mave, dim = 10)
+    
+    # ---- Run for Each Population Scenario ----
+    for (popS in popS.list) {
+      df <- data.future.raw %>%
+        mutate(
+          flux_grav = .data[[paste0("flux_grav_", popS)]],
+          flux_rad  = .data[[paste0("flux_rad_", popS)]],
+          pop       = .data[[popS]]
+        )
+      
+      var.inla <- c(var.inla.base, "flux_grav", "flux_rad")
+      data.future.cur <- cbind(
+        rbind(data.model[, var.inla], df[, var.inla]),
+        data.future.mave
+      )
+      
+      # ---- Index Construction ----
+      data.future.cur <- data.future.cur %>%
+        mutate(
+          logPop = log(pop),
+          ID = seq_len(nrow(.)),
+          CityID = match(cid, city.levels),
+          ID.year = as.integer(factor(year)),
+          ID.area.year = interaction(CityID, year, drop = TRUE) %>% as.integer()
+        )
+      
+      for (i in seq_len(ncol(data.x.mave.all))) {
+        data.future.cur[[sprintf("dir%d.grp", i)]] <-
+          inla.group.wrap(
+            data.future.cur[, c("ID", sprintf("dir%d", i))],
+            quantile(data.future.cur[, sprintf("dir%d", i)], probs = seq(0, 1, 1 / n.quantile))
+          )
+      }
+      
+      # ---- INLA Model Fitting ----
+      cat(sprintf("\n▶ Running [%s | %s | %s]\n", scenario, pattern, popS))
+      t0 <- Sys.time()
+      
+      fit <- inla(
+        fml.best,
+        family = "zeroinflatednbinomial2",
+        data = data.future.cur,
+        control.predictor = list(compute = TRUE, link = 1),
+        control.compute = list(dic = TRUE, cpo = TRUE, waic = TRUE),
+        control.fixed = list(prec = 10, prec.intercept = 0.001),
+        num.threads = max(1, detectCores() - 1)
+      )
+      
+      cat("   ⏱ Runtime:", round(difftime(Sys.time(), t0, units = "mins"), 2), "min\n")
+      
+      # ---- Save Output ----
+      data.future.cur$Pred <- fit$summary.fitted.values$mean
+      fit$data <- data.future.cur
+      save(fit, file = sprintf("obj.inla_%s_%s_pop%s.RData", scenario, pattern, popS))
+      rm(fit); gc()
+    }
+  }
+}
