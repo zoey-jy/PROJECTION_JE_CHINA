@@ -1,0 +1,149 @@
+# -------------------------------
+# Cross-validation for Japanese Encephalitis Models using INLA
+# -------------------------------
+
+rm(list = ls())
+gc()
+
+library(INLA)
+library(dplyr)
+library(data.table)
+library(ModelMetrics)
+library(combinat)
+inla.setOption(inla.mode = "experimental")
+
+# -------------------------------
+# Setup working directories and temporary folder
+# -------------------------------
+setwd("G:/First/Japanese encephalities/02 data/modeling")
+
+myDir <- "G:/First/Japanese encephalities/02 data/crossing"
+
+# -------------------------------
+# Load and model data
+# -------------------------------
+
+# -------------------------------
+# Function: group continuous variables for INLA
+# -------------------------------
+inla.group.wrap <- function(df, breaks) {
+  colnames(df)[2] <- "value"
+  df$group <- findInterval(df$value, breaks, rightmost.closed = TRUE)
+  medians <- df %>% group_by(group) %>% summarise(var.grp = median(value, na.rm = TRUE))
+  df <- merge(df, medians, by = "group")
+  df[order(df$ID), "var.grp"]
+}
+
+n.quantile <- 20
+
+# Group MAVE variables
+for (i in seq_len(ncol(data.x.mave.all))) {
+  data.valid[[paste0("dir", i, ".grp")]] <- inla.group.wrap(
+    data.valid[, c("ID", paste0("dir", i))],
+    quantile(data.valid[, paste0("dir", i)], probs = seq(0, 1, 1 / n.quantile))
+  )
+}
+
+# -------------------------------
+# Prepare indices for cross-validation
+# -------------------------------
+myData <- data.valid
+myData$ID.year <- as.integer(factor(myData$year))
+myData$ID.area.year <- as.integer(interaction(myData$city, myData$year))
+myData$ID.time <- seq_len(nrow(myData))
+myData$month1 <- myData$month
+myData$time <- as.numeric(factor(paste(myData$year, myData$month, sep = "_")))
+
+years <- 1:24  # test window
+"%ni%" <- Negate("%in%")
+
+# -------------------------------
+# Define model formulas
+# -------------------------------
+formula_list <- list(
+  Baseline = cases ~ 1 + offset(logPop) +
+    f(CityID, model = "bym", graph = W.City) +
+    f(month1, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(ID.area.year, model = "iid"),
+  
+  Spatial = cases ~ 1 + offset(logPop) +
+    X1 + X2 + X3 + X3 +
+    f(CityID, model = "bym", graph = W.City) +
+    f(month1, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(ID.area.year, model = "iid"),
+  
+  Climate = cases ~ 1 + offset(logPop) +
+    f(dir1.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(dir2.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(dir3.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(dir4.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(dir5.grp, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(CityID, model = "bym", graph = W.City) +
+    f(month1, model = "rw1", scale.model = TRUE, diagonal = 1e-4) +
+    f(ID.area.year, model = "iid")
+)
+
+# -------------------------------
+# Prepare metrics storage
+# -------------------------------
+metrics_file <- file.path(myDir, "model_metrics_summary.csv")
+model_results <- if (file.exists(metrics_file)) read.csv(metrics_file) else data.frame(
+  Model = character(), Block = integer(), DIC = numeric(), WAIC = numeric(),
+  CPO = numeric(), MAE = numeric(), stringsAsFactors = FALSE
+)
+
+# Determine blocks to run
+all_blocks <- 0:156
+existing_blocks <- list.files(myDir, pattern = "test_set_.*_block_", full.names = FALSE) %>% 
+  stringr::str_extract("block_\\d+") %>% stringr::str_remove("block_") %>% as.integer()
+blocks_to_run <- setdiff(all_blocks, existing_blocks)
+cat("Blocks to run:", paste(blocks_to_run, collapse = ", "), "\n")
+
+pb <- txtProgressBar(min = min(blocks_to_run), max = max(blocks_to_run), style = 3)
+
+for (i in blocks_to_run) {
+  setTxtProgressBar(pb, i)
+  test_years <- years + i
+  test_years <- test_years[test_years <= max(myData$time)]
+  test_idx <- which(myData$time %in% test_years)
+  if (!length(test_idx)) next
+  
+  myData_test <- myData
+  myData_test$cases[test_idx] <- NA
+  
+  for (model_name in names(formula_list)) {
+    test_file <- file.path(myDir, paste0("test_set_", model_name, "_block_", i, ".csv"))
+    if (file.exists(test_file)) next
+    
+    result <- inla(
+      formula = formula_list[[model_name]],
+      family = "zeroinflatednbinomial2",
+      data = myData_test,
+      control.predictor = list(compute = TRUE, link = 1),
+      control.inla = list(strategy = "adaptive", int.strategy = 'eb', cmin = 0),
+      control.compute = list(dic = TRUE, cpo = TRUE, waic = TRUE),
+      control.fixed = list(prec = 1, prec.intercept = 1),
+      verbose = FALSE
+    )
+    
+    dic_val  <- result$dic$dic %||% NA
+    waic_val <- result$waic$waic %||% NA
+    cpo_val  <- mean(-log(result$cpo$cpo[is.finite(result$cpo$cpo)]), na.rm = TRUE)
+    mae_val  <- mae(myData$cases[test_idx], result$summary.fitted.values$mean[test_idx])
+    
+    model_results <- rbind(model_results, data.frame(
+      Model = model_name, Block = i, DIC = dic_val, WAIC = waic_val, CPO = cpo_val, MAE = mae_val
+    ))
+    
+    write.csv(data.frame(
+      Time = myData$time[test_idx],
+      Observed = myData$cases[test_idx],
+      Predicted = result$summary.fitted.values$mean[test_idx],
+      Model = model_name, Block = i
+    ), test_file, row.names = FALSE)
+    
+    write.csv(model_results, metrics_file, row.names = FALSE)
+  }
+}
+
+close(pb)
